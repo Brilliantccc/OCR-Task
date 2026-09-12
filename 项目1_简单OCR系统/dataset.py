@@ -8,7 +8,7 @@ import random
 import numpy as np
 import cv2
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Sampler
 
 
 def load_image_fixed(img_path):
@@ -19,9 +19,9 @@ def load_image_fixed(img_path):
     return image
 
 from config import (
-    IMG_DIR, BOX_DIR, IMG_HEIGHT, IMG_WIDTH, IMG_CHANNELS,
+    IMG_DIR, BOX_DIR, IMG_HEIGHT, IMG_CHANNELS,
     CHAR_TO_IDX, BATCH_SIZE, WORKERS, PIN_MEMORY,
-    TRAIN_RATIO, VAL_RATIO, AUGMENTATION
+    TRAIN_RATIO, VAL_RATIO, AUGMENTATION, WIDTH_BUCKETS
 )
 
 
@@ -150,9 +150,9 @@ class OCRDataset(Dataset):
         return image
 
     def _preprocess(self, image):
-        """图像预处理"""
+        """图像预处理 - 保持原始宽度"""
         if image.size == 0:
-            image = np.zeros((IMG_HEIGHT, IMG_WIDTH), dtype=np.float32)
+            image = np.zeros((IMG_HEIGHT, 10), dtype=np.float32)
 
         h, w = image.shape[:2]
 
@@ -161,16 +161,6 @@ class OCRDataset(Dataset):
             ratio = IMG_HEIGHT / h
             new_w = int(w * ratio)
             image = cv2.resize(image, (new_w, IMG_HEIGHT))
-
-        # 调整宽度
-        h, w = image.shape[:2]
-        if w > IMG_WIDTH:
-            # 裁剪
-            image = image[:, :IMG_WIDTH]
-        elif w < IMG_WIDTH:
-            # 填充
-            pad_w = IMG_WIDTH - w
-            image = cv2.copyMakeBorder(image, 0, 0, 0, pad_w, cv2.BORDER_CONSTANT, value=0)
 
         # 归一化
         image = image.astype(np.float32) / 255.0
@@ -187,7 +177,7 @@ class OCRDataset(Dataset):
 
 
 def collate_fn(batch):
-    """自定义collate函数，处理不同长度的标签"""
+    """自定义collate函数，动态宽度填充"""
     images, labels, label_lengths = zip(*batch)
 
     # 填充标签到相同长度，用-1填充
@@ -197,10 +187,88 @@ def collate_fn(batch):
     for i, label in enumerate(labels):
         padded_labels[i, :len(label)] = label
 
-    images = torch.stack(images, dim=0)
+    # 动态宽度：填充到batch内最大宽度（8的倍数）
+    max_width = max(img.shape[2] for img in images)
+    max_width = (max_width + 7) // 8 * 8
+
+    padded_images = []
+    for img in images:
+        w = img.shape[2]
+        if w < max_width:
+            pad_w = max_width - w
+            img = torch.nn.functional.pad(img, (0, pad_w), value=0)
+        padded_images.append(img)
+
+    images = torch.stack(padded_images, dim=0)
     label_lengths = torch.stack(label_lengths, dim=0)
 
     return images, padded_labels, label_lengths
+
+
+class WidthBucketSampler:
+    """按固定宽度范围分桶的采样器，减少padding浪费"""
+
+    def __init__(self, dataset, batch_size, buckets=None):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.buckets = buckets or WIDTH_BUCKETS
+
+        # 计算每个样本的宽度
+        widths = []
+        for idx in range(len(dataset)):
+            img_id, box_idx = dataset.samples[idx]
+            # 从annotations获取bbox宽度
+            if img_id in dataset.annotations:
+                annotations = dataset.annotations[img_id]
+                if box_idx < len(annotations):
+                    bbox, _ = annotations[box_idx]
+                    x_coords = [bbox[i] for i in range(0, 8, 2)]
+                    y_coords = [bbox[i] for i in range(1, 8, 2)]
+                    width = max(x_coords) - min(x_coords)
+                    heights = max(y_coords) - min(y_coords)
+                    # 预处理后的宽度
+                    ratio = 32 / max(heights, 1)
+                    width = int(width * ratio)
+                else:
+                    width = 100
+            else:
+                width = 100
+            widths.append(width)
+
+        self.widths = np.array(widths)
+
+        # 按固定范围分桶
+        self.bucket_indices = [[] for _ in range(len(self.buckets) + 1)]
+        for idx, w in enumerate(widths):
+            placed = False
+            for i, boundary in enumerate(self.buckets):
+                if w < boundary:
+                    self.bucket_indices[i].append(idx)
+                    placed = True
+                    break
+            if not placed:
+                self.bucket_indices[-1].append(idx)
+
+        # 打印分桶统计
+        for i, boundary in enumerate(self.buckets):
+            name = f"<{boundary}" if i == 0 else f"{self.buckets[i-1]}~{boundary}"
+            print(f"  Bucket {name}: {len(self.bucket_indices[i])} samples")
+        print(f"  Bucket >{self.buckets[-1]}: {len(self.bucket_indices[-1])} samples")
+
+    def __iter__(self):
+        indices = []
+        for bucket in self.bucket_indices:
+            if len(bucket) == 0:
+                continue
+            bucket = np.array(bucket)
+            np.random.shuffle(bucket)
+            for i in range(0, len(bucket), self.batch_size):
+                indices.append(bucket[i:i + self.batch_size].tolist())
+        np.random.shuffle(indices)
+        return iter(indices)
+
+    def __len__(self):
+        return (len(self.dataset) + self.batch_size - 1) // self.batch_size
 
 
 def get_data_loaders():
@@ -255,22 +323,21 @@ def get_data_loaders():
     val_dataset = OCRDataset(val_samples, augment=False)
     test_dataset = OCRDataset(test_samples, augment=False)
 
+    train_sampler = WidthBucketSampler(train_dataset, BATCH_SIZE, WIDTH_BUCKETS)
     train_loader = DataLoader(
         train_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=True,
+        batch_sampler=train_sampler,
         num_workers=WORKERS,
         pin_memory=PIN_MEMORY,
         collate_fn=collate_fn,
-        drop_last=True,
         persistent_workers=True,
         prefetch_factor=2
     )
 
+    val_sampler = WidthBucketSampler(val_dataset, BATCH_SIZE, WIDTH_BUCKETS)
     val_loader = DataLoader(
         val_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=False,
+        batch_sampler=val_sampler,
         num_workers=WORKERS,
         pin_memory=PIN_MEMORY,
         collate_fn=collate_fn,

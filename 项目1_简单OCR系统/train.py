@@ -3,16 +3,16 @@
 支持：正常训练、断点续训、微调模式
 """
 import os
+import math
 import argparse
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from tqdm import tqdm
 
 from config import (
     DEVICE, NUM_EPOCHS, LEARNING_RATE, LR_WARMUP_EPOCHS, LR_MIN,
-    EARLY_STOP_PATIENCE, SAVE_INTERVAL, VERSION, VERSION_DIR, init_dirs
+    EARLY_STOP_PATIENCE, SAVE_INTERVAL, init_dirs, init_version
 )
 from dataset import get_data_loaders
 from model import CRNN, weights_init
@@ -20,6 +20,15 @@ from utils import (
     decode_output, compute_accuracy, compute_edit_distance,
     save_checkpoint, load_checkpoint, AverageMeter, IDX_TO_CHAR
 )
+
+
+def get_lr(epoch, base_lr, warmup_epochs, total_epochs, min_lr):
+    """手动计算预热+余弦退火学习率"""
+    if epoch < warmup_epochs:
+        return base_lr * (epoch + 1) / warmup_epochs
+    else:
+        progress = (epoch - warmup_epochs) / (total_epochs - warmup_epochs)
+        return min_lr + 0.5 * (base_lr - min_lr) * (1 + math.cos(math.pi * progress))
 
 
 def train_one_epoch(model, train_loader, criterion, optimizer, device, epoch, total_epochs):
@@ -141,11 +150,13 @@ def main():
     args = parser.parse_args()
 
     # 初始化目录
+    init_version()
     init_dirs()
 
     # 打印头部
+    import config
     print("\n" + "=" * 60)
-    print(f"  OCR Training - CRNN + CTC Loss (Version {VERSION})")
+    print(f"  OCR Training - CRNN + CTC Loss (Version {config.VERSION})")
     print("=" * 60)
 
     # 设置设备
@@ -188,7 +199,7 @@ def main():
     elif args.resume:
         # 断点续训：加载checkpoint继续训练
         mode = "Resume"
-        checkpoint_path = os.path.join(VERSION_DIR, "best_model.pth")
+        checkpoint_path = os.path.join(config.VERSION_DIR, "best_model.pth")
         if os.path.exists(checkpoint_path):
             start_epoch, best_acc = load_checkpoint(model, None, checkpoint_path)
             start_epoch += 1
@@ -200,23 +211,7 @@ def main():
         # 正常训练
         optimizer = AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
 
-    # 学习率调度：预热 + 余弦退火
-    warmup_scheduler = LinearLR(
-        optimizer,
-        start_factor=0.1,
-        end_factor=1.0,
-        total_iters=LR_WARMUP_EPOCHS
-    )
-    cosine_scheduler = CosineAnnealingLR(
-        optimizer,
-        T_max=num_epochs - LR_WARMUP_EPOCHS,
-        eta_min=LR_MIN
-    )
-    scheduler = SequentialLR(
-        optimizer,
-        schedulers=[warmup_scheduler, cosine_scheduler],
-        milestones=[LR_WARMUP_EPOCHS]
-    )
+    num_epochs = args.epochs
 
     # 打印训练模式
     print(f"\n  Mode: {mode}")
@@ -227,40 +222,52 @@ def main():
     print("=" * 60)
 
     early_stop_counter = 0
-    num_epochs = args.epochs
     best_val_acc = 0
+    history = []
 
     for epoch in range(start_epoch, num_epochs):
+        # 手动更新学习率（预热 + 余弦退火）
+        lr = get_lr(epoch, LEARNING_RATE, LR_WARMUP_EPOCHS, num_epochs, LR_MIN)
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = lr
+
         # 训练
         train_metrics = train_one_epoch(model, train_loader, criterion, optimizer, device, epoch + 1, num_epochs)
 
         # 验证
         val_metrics = validate(model, val_loader, criterion, device, epoch + 1, num_epochs)
 
-        # 更新学习率
-        current_lr = optimizer.param_groups[0]['lr']
-        scheduler.step()
-
         # 打印epoch总结
         print(f"\n  Epoch {epoch+1}/{num_epochs} Summary:")
         print(f"  Train - Loss: {train_metrics['loss']:.4f} | Char Acc: {train_metrics['char_acc']:.4f}")
         print(f"  Val   - Loss: {val_metrics['loss']:.4f} | Char Acc: {val_metrics['char_acc']:.4f} | "
               f"Word Acc: {val_metrics['word_acc']:.4f}")
-        print(f"  LR: {current_lr:.6f}")
+        print(f"  LR: {lr:.6f}")
+
+        # 记录历史
+        history.append({
+            'epoch': epoch + 1,
+            'train_loss': train_metrics['loss'],
+            'train_acc': train_metrics['char_acc'],
+            'val_loss': val_metrics['loss'],
+            'val_acc': val_metrics['char_acc'],
+            'val_word_acc': val_metrics['word_acc'],
+            'lr': lr
+        })
 
         # 保存最佳模型
         if val_metrics['char_acc'] > best_val_acc:
             best_val_acc = val_metrics['char_acc']
             early_stop_counter = 0
             save_checkpoint(model, optimizer, epoch, best_val_acc,
-                            os.path.join(VERSION_DIR, "best_model.pth"))
+                            os.path.join(config.VERSION_DIR, "best_model.pth"))
             print(f"  ★ New best model saved! Char Acc: {best_val_acc:.4f}")
         else:
             early_stop_counter += 1
 
         # 保存最后一个epoch
         save_checkpoint(model, optimizer, epoch, best_val_acc,
-                        os.path.join(VERSION_DIR, "last.pth"))
+                        os.path.join(config.VERSION_DIR, "last.pth"))
 
         # 早停
         if early_stop_counter >= EARLY_STOP_PATIENCE:
@@ -274,7 +281,7 @@ def main():
     print("  Training Complete! Running final test...")
     print("=" * 60)
 
-    load_checkpoint(model, optimizer, os.path.join(VERSION_DIR, "best_model.pth"))
+    load_checkpoint(model, optimizer, os.path.join(config.VERSION_DIR, "best_model.pth"))
     test_metrics = validate(model, test_loader, criterion, device, num_epochs, num_epochs)
 
     print(f"\n  Final Test Results:")
@@ -282,6 +289,26 @@ def main():
     print(f"  Word Acc:  {test_metrics['word_acc']:.4f}")
     print(f"  Edit Dist: {test_metrics['edit_dist']:.2f}")
     print("\n" + "=" * 60)
+
+    # 保存训练历史
+    import json
+    import csv
+
+    # JSON格式
+    history_json = os.path.join(config.VERSION_DIR, "history.json")
+    with open(history_json, 'w', encoding='utf-8') as f:
+        json.dump(history, f, indent=2, ensure_ascii=False)
+
+    # CSV格式
+    history_csv = os.path.join(config.VERSION_DIR, "history.csv")
+    with open(history_csv, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=history[0].keys())
+        writer.writeheader()
+        writer.writerows(history)
+
+    print(f"\n  训练历史已保存:")
+    print(f"    JSON: {history_json}")
+    print(f"    CSV:  {history_csv}")
 
 
 if __name__ == "__main__":

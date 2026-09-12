@@ -7,10 +7,11 @@ import torch
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 from config import (
-    DEVICE, VERSION, VERSION_DIR, IMG_DIR, BOX_DIR, IMG_HEIGHT, IMG_WIDTH,
-    CHAR_TO_IDX, IDX_TO_CHAR
+    DEVICE, VERSION_DIR, IMG_DIR, BOX_DIR, IMG_HEIGHT, IMG_WIDTH,
+    CHAR_TO_IDX, IDX_TO_CHAR, init_version
 )
 from dataset import get_data_loaders
 from model import CRNN
@@ -110,7 +111,7 @@ def visualize_predictions(model, device, num_samples=10):
 
             # 解码真实文本
             for i in range(labels.size(0)):
-                gt_text = ''.join([chr(c) for c in labels[i, :label_lengths[i]].cpu().numpy()])
+                gt_text = ''.join([IDX_TO_CHAR.get(c, '') for c in labels[i, :label_lengths[i]].cpu().numpy()])
                 gt_texts.append(gt_text)
 
             pred_texts.extend(batch_pred_texts)
@@ -123,7 +124,7 @@ def visualize_predictions(model, device, num_samples=10):
 
     for i in range(min(num_samples, len(images_list))):
         axes[i].imshow(images_list[i], cmap='gray')
-        axes[i].set_title(f"预测: {pred_texts[i]}\n真实: {gt_texts[i]}",
+        axes[i].set_title(f"Pred: {pred_texts[i]}\nTrue: {gt_texts[i]}",
                           color='green' if pred_texts[i] == gt_texts[i] else 'red')
         axes[i].axis('off')
 
@@ -141,8 +142,9 @@ def evaluate_on_test_set(model, device):
     all_gt_texts = []
 
     model.eval()
+    pbar = tqdm(test_loader, desc='Evaluating')
     with torch.no_grad():
-        for images, labels, label_lengths in test_loader:
+        for images, labels, label_lengths in pbar:
             images = images.to(device)
             outputs = model(images)
 
@@ -151,13 +153,13 @@ def evaluate_on_test_set(model, device):
             all_pred_texts.extend(pred_texts)
 
             for i in range(labels.size(0)):
-                gt_text = ''.join([chr(c) for c in labels[i, :label_lengths[i]].cpu().numpy()])
+                gt_text = ''.join([IDX_TO_CHAR.get(c, '') for c in labels[i, :label_lengths[i]].cpu().numpy()])
                 all_gt_texts.append(gt_text)
 
     # 计算指标
     char_acc, word_acc = compute_accuracy(all_pred_texts, all_gt_texts)
 
-    print(f"测试集结果:")
+    print(f"\n测试集结果:")
     print(f"  样本数: {len(all_gt_texts)}")
     print(f"  字符准确率: {char_acc:.4f}")
     print(f"  词准确率: {word_acc:.4f}")
@@ -173,16 +175,28 @@ def evaluate_on_test_set(model, device):
 
 def main():
     parser = argparse.ArgumentParser(description='OCR模型评估')
-    parser.add_argument('--model', type=str, default=None, help='模型路径')
-    parser.add_argument('--version', type=int, default=VERSION, help='模型版本号')
+    parser.add_argument('--model', type=str, default=None, help='模型路径（如 runs/v1/best_model.pth）')
+    parser.add_argument('--version', type=int, default=None, help='模型版本号')
     parser.add_argument('--image', type=str, default=None, help='单张图像路径')
     parser.add_argument('--visualize', action='store_true', help='可视化预测结果')
     parser.add_argument('--test', action='store_true', help='在测试集上评估')
 
     args = parser.parse_args()
 
+    # 初始化版本
+    init_version()
+    import config
+
+    # 确定模型路径
+    if args.model:
+        model_path = args.model
+    else:
+        model_path = os.path.join(config.VERSION_DIR, "best_model.pth")
+
+    print(f"加载模型: {model_path}")
+
     # 加载模型
-    model, device = load_model(args.model)
+    model, device = load_model(model_path)
 
     if args.image:
         # 单张图像预测

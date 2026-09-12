@@ -14,9 +14,30 @@ KEY_DIR = os.path.join(DATA_DIR, "key")
 # 模型保存路径
 MODEL_DIR = os.path.join(BASE_DIR, "runs")
 
+
+def get_next_version():
+    """自动获取下一个版本号"""
+    import re
+    if not os.path.exists(MODEL_DIR):
+        return 1
+    versions = []
+    for item in os.listdir(MODEL_DIR):
+        match = re.match(r'v(\d+)', item)
+        if match:
+            versions.append(int(match.group(1)))
+    return max(versions) + 1 if versions else 1
+
+
 # 版本管理
-VERSION = 1  # 每次新训练递增：1, 2, 3...
-VERSION_DIR = os.path.join(MODEL_DIR, f"v{VERSION}")
+VERSION = None
+VERSION_DIR = None
+
+
+def init_version():
+    """初始化版本号（在train.py中调用）"""
+    global VERSION, VERSION_DIR
+    VERSION = get_next_version()
+    VERSION_DIR = os.path.join(MODEL_DIR, f"v{VERSION}")
 
 # ==================== 数据配置 ====================
 # 字符集（收据中常见的字符）
@@ -27,7 +48,7 @@ NUM_CLASSES = len(CHARS) + 1  # +1 for CTC blank
 
 # 图像配置
 IMG_HEIGHT = 32
-IMG_WIDTH = 320
+IMG_WIDTH = 640  # 增大宽度以支持长文本
 IMG_CHANNELS = 1  # 灰度图
 
 # ==================== 训练配置 ====================
@@ -40,6 +61,9 @@ LEARNING_RATE = 0.001
 NUM_EPOCHS = 100
 WORKERS = 8
 PIN_MEMORY = True
+
+# 宽度分桶配置
+WIDTH_BUCKETS = [256, 512, 1024, 2048]  # 分桶边界
 
 # 数据划分
 TRAIN_RATIO = 0.8
