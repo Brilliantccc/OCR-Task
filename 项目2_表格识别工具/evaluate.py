@@ -88,107 +88,109 @@ def evaluate_detection(model, test_loader, device, score_threshold=0.5):
                     'label': gt_labels[j].item(),
                 })
 
-    # ---- COCO 风格 mAP（多 IoU 阈值）----
-    iou_thresholds = np.arange(0.5, 1.0, 0.05)  # [0.50, 0.55, ..., 0.95]
-    aps_all_iou = [[] for _ in iou_thresholds]
+    # ---- 逐图计算 AP + P/R/F1 ----
+    print(f"  Computing metrics ({len(all_predictions)} preds, {len(all_ground_truths)} GTs)...")
+    iou_thresholds = np.arange(0.5, 1.0, 0.05)
 
-    id_to_name = {v: k for k, v in DETECTION_CLASSES.items()}
+    # 预分组：一次遍历，O(N)
+    preds_by_img = {}
+    for p in all_predictions:
+        if p['label'] > 0:
+            preds_by_img.setdefault(p['image_id'], []).append(p)
+    gts_by_img = {}
+    for g in all_ground_truths:
+        gts_by_img.setdefault(g['image_id'], []).append(g)
 
-    for cls_id, cls_name in id_to_name.items():
-        if cls_id == 0:
+    all_image_ids = set(preds_by_img) | set(gts_by_img)
+
+    cls_records = {1: [], 2: []}
+    cls_n_gt = {1: 0, 2: 0}
+    total_tp = 0
+    total_fp = 0
+    total_fn = 0
+
+    for img_id in sorted(all_image_ids):
+        preds = preds_by_img.get(img_id, [])
+        gts = gts_by_img.get(img_id, [])
+
+        if not preds and not gts:
             continue
 
-        cls_preds = [p for p in all_predictions if p['label'] == cls_id]
-        cls_gts = [g for g in all_ground_truths if g['label'] == cls_id]
-
-        if not cls_gts:
-            continue
-
-        cls_preds = sorted(cls_preds, key=lambda x: x['score'], reverse=True)
-
-        for iou_idx, iou_thresh in enumerate(iou_thresholds):
-            tp = np.zeros(len(cls_preds))
-            fp = np.zeros(len(cls_preds))
-            matched_gt = set()
-
-            for pred_idx, pred in enumerate(cls_preds):
-                best_iou = 0
-                best_gt_idx = -1
-
-                for gt_idx, gt in enumerate(cls_gts):
-                    if gt['image_id'] != pred['image_id']:
-                        continue
-                    gt_key = (gt['image_id'], gt_idx)
-                    if gt_key in matched_gt:
-                        continue
-
-                    iou = compute_iou(
-                        torch.tensor(pred['bbox']).unsqueeze(0),
-                        torch.tensor(gt['bbox']).unsqueeze(0)
-                    ).item()
-
-                    if iou > best_iou:
-                        best_iou = iou
-                        best_gt_idx = gt_idx
-
-                if best_iou >= iou_thresh and best_gt_idx >= 0:
-                    tp[pred_idx] = 1
-                    matched_gt.add((pred['image_id'], best_gt_idx))
+        # 传统 P/R/F1 (IoU=0.5, numpy 匹配)
+        if preds and gts:
+            pred_boxes = torch.tensor([p['bbox'] for p in preds], dtype=torch.float32)
+            gt_boxes = torch.tensor([g['bbox'] for g in gts], dtype=torch.float32)
+            ious = compute_iou(pred_boxes, gt_boxes).numpy()
+            sorted_idx = sorted(range(len(preds)), key=lambda i: preds[i]['score'], reverse=True)
+            matched_mask = np.zeros(len(gts), dtype=bool)
+            for pred_i in sorted_idx:
+                row = ious[pred_i].copy()
+                row[matched_mask] = -1.0
+                best_gt = row.argmax()
+                best_iou = row[best_gt]
+                if best_iou >= 0.5:
+                    total_tp += 1
+                    matched_mask[best_gt] = True
                 else:
-                    fp[pred_idx] = 1
+                    total_fp += 1
+            total_fn += len(gts) - matched_mask.sum()
+        else:
+            total_fp += len(preds)
+            total_fn += len(gts)
 
-            # 全点插值 AP（比11点更准确）
-            tp_cumsum = np.cumsum(tp)
-            fp_cumsum = np.cumsum(fp)
-            prec = tp_cumsum / (tp_cumsum + fp_cumsum + 1e-6)
-            rec = tp_cumsum / (len(cls_gts) + 1e-6)
-            # 使 precision 单调递减
+        # COCO AP：每个类别匹配一次（numpy）
+        for cls in [1, 2]:
+            cls_preds = sorted([p for p in preds if p['label'] == cls], key=lambda x: x['score'], reverse=True)
+            cls_gts_list = [g for g in gts if g['label'] == cls]
+            cls_n_gt[cls] += len(cls_gts_list)
+
+            if not cls_preds:
+                continue
+            if not cls_gts_list:
+                for p in cls_preds:
+                    cls_records[cls].append((p['score'], 0.0))
+                continue
+
+            pb = torch.tensor([p['bbox'] for p in cls_preds], dtype=torch.float32)
+            gb = torch.tensor([g['bbox'] for g in cls_gts_list], dtype=torch.float32)
+            ious = compute_iou(pb, gb).numpy()
+
+            matched_mask = np.zeros(len(cls_gts_list), dtype=bool)
+            for pred_i in range(len(cls_preds)):
+                row = ious[pred_i].copy()
+                row[matched_mask] = -1.0
+                best_gt = row.argmax()
+                best_iou = row[best_gt]
+                cls_records[cls].append((cls_preds[pred_i]['score'], best_iou))
+                if best_iou >= 0.5:
+                    matched_mask[best_gt] = True
+
+    # 汇总 COCO AP（一次遍历 per 阈值）
+    aps_all_iou = [[] for _ in iou_thresholds]
+    for cls in [1, 2]:
+        records = cls_records[cls]
+        n_gt = cls_n_gt[cls]
+        if not records or n_gt == 0:
+            continue
+        records.sort(key=lambda x: x[0], reverse=True)
+        best_ious = np.array([r[1] for r in records])
+        for iou_idx, iou_thresh in enumerate(iou_thresholds):
+            tp = (best_ious >= iou_thresh).astype(np.float64)
+            tp_cum = np.cumsum(tp)
+            fp_cum = np.cumsum(1.0 - tp)
+            prec = tp_cum / (tp_cum + fp_cum + 1e-6)
+            rec = tp_cum / (n_gt + 1e-6)
             for i in range(len(prec) - 2, -1, -1):
                 prec[i] = max(prec[i], prec[i + 1])
             r = np.concatenate(([0.0], rec, [1.0]))
             p = np.concatenate(([1.0], prec, [0.0]))
             ap = np.sum((r[1:] - r[:-1]) * p[1:])
-
             aps_all_iou[iou_idx].append(ap)
 
-    # 汇总 COCO 指标
-    ap50 = np.mean(aps_all_iou[0]) if aps_all_iou[0] else 0       # index 0 = IoU 0.50
-    ap75 = np.mean(aps_all_iou[5]) if aps_all_iou[5] else 0       # index 5 = IoU 0.75
+    ap50 = np.mean(aps_all_iou[0]) if aps_all_iou[0] else 0
+    ap75 = np.mean(aps_all_iou[5]) if aps_all_iou[5] else 0
     aps_values = [np.mean(v) for v in aps_all_iou if v]
     map_50_95 = np.mean(aps_values) if aps_values else 0
-
-    # ---- 传统 Precision / Recall / F1（IoU=0.5）----
-    total_tp = 0
-    total_fp = 0
-    total_fn = 0
-
-    image_ids = set(p['image_id'] for p in all_predictions) | set(g['image_id'] for g in all_ground_truths)
-    for img_id in image_ids:
-        preds = [p for p in all_predictions if p['image_id'] == img_id and p['label'] > 0]
-        gts = [g for g in all_ground_truths if g['image_id'] == img_id]
-
-        matched = set()
-        for pred in sorted(preds, key=lambda x: x['score'], reverse=True):
-            best_iou = 0
-            best_gt = -1
-            for gt_idx, gt in enumerate(gts):
-                if gt_idx in matched:
-                    continue
-                iou = compute_iou(
-                    torch.tensor(pred['bbox']).unsqueeze(0),
-                    torch.tensor(gt['bbox']).unsqueeze(0)
-                ).item()
-                if iou > best_iou:
-                    best_iou = iou
-                    best_gt = gt_idx
-
-            if best_iou >= 0.5:
-                total_tp += 1
-                matched.add(best_gt)
-            else:
-                total_fp += 1
-
-        total_fn += len(gts) - len(matched)
 
     precision = total_tp / (total_tp + total_fp + 1e-6)
     recall = total_tp / (total_tp + total_fn + 1e-6)

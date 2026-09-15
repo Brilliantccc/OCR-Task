@@ -134,6 +134,12 @@ AUGMENTATION = {
     "saturation_range": (0.8, 1.2),  # 同上
     "noise_prob": 0.2,               # 文档图像噪声概率降低
     "blur_prob": 0.1,                # 模糊会破坏文字，大幅降低
+    # --- 新增增强 ---
+    "scale_crop_prob": 0.5,          # 随机缩放裁剪概率
+    "scale_range": (0.8, 1.2),       # 缩放范围
+    "grayscale_prob": 0.2,           # 随机灰度化概率
+    "jpeg_compress_prob": 0.15,      # 随机 JPEG 压缩概率
+    "jpeg_quality_range": (30, 90),  # JPEG 质量范围（越低越模糊）
 }
 
 # ==================== 后处理配置 ====================

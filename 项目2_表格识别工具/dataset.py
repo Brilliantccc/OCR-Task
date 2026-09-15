@@ -45,9 +45,13 @@ class TableDetectionAugmentation:
         labels = target['labels'].clone()
         img_h, img_w = image.shape[:2]
 
-        # ---- 几何变换（需要同步变换 bbox）----
+        # ===== 1. 随机缩放裁剪（几何变换，需要同步 bbox）=====
+        if random.random() < self.aug_config.get('scale_crop_prob', 0.0):
+            image, boxes, labels = self._random_scale_crop(
+                image, boxes, labels, img_h, img_w)
+            img_h, img_w = image.shape[:2]
 
-        # 随机水平翻转
+        # ===== 2. 随机翻转 =====
         if random.random() < self.aug_config.get('horizontal_flip_prob', 0.5):
             image = np.flip(image, axis=1).copy()
             x1 = boxes[:, 0].clone()
@@ -55,7 +59,6 @@ class TableDetectionAugmentation:
             boxes[:, 0] = img_w - x2
             boxes[:, 2] = img_w - x1
 
-        # 随机垂直翻转
         if random.random() < self.aug_config.get('vertical_flip_prob', 0.0):
             image = np.flip(image, axis=0).copy()
             y1 = boxes[:, 1].clone()
@@ -63,36 +66,44 @@ class TableDetectionAugmentation:
             boxes[:, 1] = img_h - y2
             boxes[:, 3] = img_h - y1
 
-        # ---- 颜色/像素变换（不影响 bbox）----
-
-        # 亮度调整
+        # ===== 3. 颜色变换 =====
         if random.random() < 0.5:
             alpha = random.uniform(*self.aug_config['brightness_range'])
             image = cv2.convertScaleAbs(image, alpha=alpha, beta=0)
 
-        # 对比度调整
         if random.random() < 0.5:
             alpha = random.uniform(*self.aug_config['contrast_range'])
             image = cv2.convertScaleAbs(image, alpha=alpha, beta=0)
 
-        # 饱和度调整（转 HSV 调 S 通道）
         if random.random() < 0.5:
             hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV).astype(np.float32)
             s_factor = random.uniform(*self.aug_config.get('saturation_range', (0.8, 1.2)))
             hsv[:, :, 1] = np.clip(hsv[:, :, 1] * s_factor, 0, 255)
             image = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB)
 
-        # 随机噪声
+        # ===== 4. 随机灰度化 =====
+        if random.random() < self.aug_config.get('grayscale_prob', 0.0):
+            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+            image = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
+
+        # ===== 5. 随机 JPEG 压缩 =====
+        if random.random() < self.aug_config.get('jpeg_compress_prob', 0.0):
+            quality = random.randint(*self.aug_config.get('jpeg_quality_range', (30, 90)))
+            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
+            _, buf = cv2.imencode('.jpg', cv2.cvtColor(image, cv2.COLOR_RGB2BGR), encode_param)
+            image = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        # ===== 6. 噪声与模糊 =====
         if random.random() < self.aug_config['noise_prob']:
             noise = np.random.normal(0, 10, image.shape).astype(np.float32)
             image = np.clip(image.astype(np.float32) + noise, 0, 255).astype(np.uint8)
 
-        # 随机模糊
         if random.random() < self.aug_config.get('blur_prob', 0.0):
-            ksize = int(random.uniform(0.5, 1.5)) * 2 + 1  # 奇数核
+            ksize = int(random.uniform(0.5, 1.5)) * 2 + 1
             image = cv2.GaussianBlur(image, (ksize, ksize), 0)
 
-        # ---- 后处理：裁剪越界、去掉无效 bbox ----
+        # ===== 后处理 =====
         if len(boxes) > 0:
             boxes[:, 0] = boxes[:, 0].clamp(0, img_w)
             boxes[:, 1] = boxes[:, 1].clamp(0, img_h)
@@ -107,6 +118,69 @@ class TableDetectionAugmentation:
         target['labels'] = labels
 
         return image, target
+
+    def _random_scale_crop(self, image, boxes, labels, img_h, img_w):
+        """
+        随机缩放裁剪：缩放图片和bbox，裁剪到原尺寸
+        - scale > 1.0: 放大后裁剪（zoom in，看到更多细节）
+        - scale < 1.0: 缩小后补灰边（zoom out，看到更多上下文）
+        """
+        scale_range = self.aug_config.get('scale_range', (0.8, 1.2))
+        scale = random.uniform(*scale_range)
+
+        new_h = int(img_h * scale)
+        new_w = int(img_w * scale)
+
+        # 缩放图片
+        image_scaled = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+
+        # 缩放 bbox
+        if len(boxes) > 0:
+            boxes_scaled = boxes.clone()
+            boxes_scaled[:, [0, 2]] *= scale
+            boxes_scaled[:, [1, 3]] *= scale
+        else:
+            boxes_scaled = boxes.clone()
+
+        if scale >= 1.0:
+            # 放大：随机裁剪中心区域
+            crop_x = random.randint(0, new_w - img_w)
+            crop_y = random.randint(0, new_h - img_h)
+            image_cropped = image_scaled[crop_y:crop_y + img_h, crop_x:crop_x + img_w]
+
+            # bbox 坐标平移
+            if len(boxes_scaled) > 0:
+                boxes_scaled[:, [0, 2]] -= crop_x
+                boxes_scaled[:, [1, 3]] -= crop_y
+        else:
+            # 缩小：居中放置，周围补灰边
+            pad_x = (img_w - new_w) // 2
+            pad_y = (img_h - new_h) // 2
+            image_cropped = np.full((img_h, img_w, 3), 128, dtype=np.uint8)
+            image_cropped[pad_y:pad_y + new_h, pad_x:pad_x + new_w] = image_scaled
+
+            # bbox 坐标平移
+            if len(boxes_scaled) > 0:
+                boxes_scaled[:, [0, 2]] += pad_x
+                boxes_scaled[:, [1, 3]] += pad_y
+
+        # 过滤：裁剪后 bbox 被截断超过 50% 的丢弃
+        if len(boxes_scaled) > 0:
+            orig_areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+            # clip 到图片范围
+            clipped = boxes_scaled.clone()
+            clipped[:, 0] = clipped[:, 0].clamp(0, img_w)
+            clipped[:, 1] = clipped[:, 1].clamp(0, img_h)
+            clipped[:, 2] = clipped[:, 2].clamp(0, img_w)
+            clipped[:, 3] = clipped[:, 3].clamp(0, img_h)
+            new_areas = (clipped[:, 2] - clipped[:, 0]) * (clipped[:, 3] - clipped[:, 1])
+
+            # 保留面积损失不超过 50% 的 bbox
+            valid = new_areas > orig_areas * 0.5
+            boxes_scaled = clipped[valid]
+            labels = labels[valid]
+
+        return image_cropped, boxes_scaled, labels
 
 
 # ==================== 表格检测数据集 ====================
