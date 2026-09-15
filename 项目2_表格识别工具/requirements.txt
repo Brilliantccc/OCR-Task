@@ -1,0 +1,10 @@
+# 项目2_表格识别工具 依赖
+# 环境: PyTorch 2.1.0 + CUDA 12.1 + Python 3.10
+
+# AutoDL 镜像已预装 PyTorch, 无需手动安装
+# 如需手动安装: pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu121
+
+numpy>=1.21.0
+Pillow>=9.0.0
+tqdm>=4.60.0
+opencv-python>=4.5.0

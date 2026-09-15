@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# 数据集
+data/
+*.tar
+*.zip
+
+# 模型权重（太大不上传）
+runs/
+*.pth
+*.pt
+
+# IDE / 工具
+.codegraph/
+.vscode/
+.idea/
+*.swp
+
+# 系统
+.DS_Store
+Thumbs.db
