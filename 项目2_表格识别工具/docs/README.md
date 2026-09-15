@@ -2,6 +2,9 @@
 
 基于 Faster R-CNN 的表格检测与结构识别系统，支持 ICDAR 2019 cTDaR 数据集。
 
+**模型权重**: [ModelScope - table-detection-and-structure](https://www.modelscope.cn/models/Brilliantccc/table-detection-and-structure)
+**源码**: [GitHub - table-detection-and-structure](https://github.com/Brilliantccc/table-detection-and-structure)
+
 ## 目录
 
 - [项目概述](#项目概述)

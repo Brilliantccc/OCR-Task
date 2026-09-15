@@ -1,5 +1,8 @@
 # 表格识别工具 (Table Recognition Tool)
 
+[![ModelScope](https://img.shields.io/badge/ModelScope-模型权重-blue)](https://www.modelscope.cn/models/Brilliantccc/table-detection-and-structure)
+[![GitHub](https://img.shields.io/badge/GitHub-源码-black)](https://github.com/Brilliantccc/table-detection-and-structure)
+
 基于 Faster R-CNN 的表格检测与结构识别系统，支持 ICDAR 2019 cTDaR 数据集。
 
 ## 功能
@@ -98,14 +101,25 @@ python inference.py \
 
 ## 训练效果
 
-在 ICDAR 2019 cTDaR TrackB 上的最新结果：
+| 模型 | 任务 | mAP@0.50 |
+|------|------|:--------:|
+| 检测模型 | 在文档中找表格 | **0.9078** |
+| 结构识别模型 | 在表格内找 cell | **0.7511** |
+
+结构识别模型详细指标（ICDAR 2019 cTDaR TrackB 测试集）：
 
 | 指标 | 值 |
 |------|-----|
-| mAP@0.5 | 0.7888 |
-| Precision | 0.9382 |
-| Recall | 0.6387 |
-| F1-Score | 0.7600 |
+| AP@0.50 | 0.7511 |
+| AP@0.75 | 0.6342 |
+| AP@0.50:0.95 | 0.5643 |
+| Precision | 0.9191 |
+| Recall | 0.6574 |
+| F1-Score | 0.7665 |
+
+## 模型下载
+
+预训练模型权重：[ModelScope - table-detection-and-structure](https://www.modelscope.cn/models/Brilliantccc/table-detection-and-structure)
 
 ## 详细文档
 
