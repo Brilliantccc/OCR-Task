@@ -1,0 +1,9 @@
+[submodule "项目1_简单OCR系统"]
+	path = 项目1_简单OCR系统
+	url = https://github.com/Brilliantccc/Simple-OCR-System.git
+[submodule "项目2_表格识别工具"]
+	path = 项目2_表格识别工具
+	url = https://github.com/Brilliantccc/table-detection-and-structure.git
+[submodule "项目3_文档版面分析系统"]
+	path = 项目3_文档版面分析系统
+	url = https://github.com/Brilliantccc/document-layout-analysis.git

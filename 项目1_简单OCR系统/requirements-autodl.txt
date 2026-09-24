@@ -1,5 +1,0 @@
-# AutoDL专用依赖（PyTorch已预装）
-opencv-python-headless>=4.5.0,<5.0
-numpy>=1.19.0,<2.0
-editdistance>=0.5.0
-tqdm>=4.60.0
