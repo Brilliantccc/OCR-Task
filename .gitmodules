@@ -7,3 +7,6 @@
 [submodule "项目3_文档版面分析系统"]
 	path = 项目3_文档版面分析系统
 	url = https://github.com/Brilliantccc/document-layout-analysis.git
+[submodule "项目4_公式识别系统"]
+	path = 项目4_公式识别系统
+	url = https://github.com/Brilliantccc/latex-formula-recognition.git
