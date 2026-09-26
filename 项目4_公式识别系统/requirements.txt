@@ -1,0 +1,19 @@
+# 项目4：公式识别系统 — 依赖
+#
+# ⚠️ 这里的版本上界是有意为之，不要随意放宽：
+#   - torch 2.1.x 需要 numpy<2（numpy 2.0 改了 ABI，torch 直到 2.3 才支持）
+#   - opencv-python 5.x 要求 numpy>=2，一旦装上就会与上面直接冲突
+#   两者都没写上界时，pip 可能自由升级到不兼容的组合，导致 import 阶段就崩。
+#
+# 在 AutoDL 上（镜像已预装 torch）请改用 requirements-autodl.txt，
+# 那里只列需要额外安装的包，避免 pip 去动镜像里已配好的 torch。
+
+torch>=2.0.0
+torchvision>=0.15.0
+
+numpy>=1.24,<2
+opencv-python>=4.8,<5
+Pillow>=9.5.0
+tqdm>=4.65.0
+nltk>=3.8.0
+matplotlib>=3.7.0
