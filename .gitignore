@@ -1,8 +1,7 @@
 # ==================== 子项目 ====================
-# 项目1/2/3 已拆分为独立仓库，通过 git submodule 引用（见 .gitmodules）。
+# 项目1/2/3/4 均为独立仓库，通过 git submodule 引用（见 .gitmodules）。
 # 它们不在忽略列表里 —— submodule 需要被跟踪。clone 本仓库后执行：
 #     git submodule update --init --recursive
-# 项目4/5 仍是本仓库的一部分。
 
 # ==================== Python ====================
 __pycache__/
