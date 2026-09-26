@@ -140,6 +140,8 @@ HME100K 按官方难度分档：
 
 **CROHME**（Competition on Recognition of Online Handwritten Mathematical Expressions）
 - 来源：CROHME 竞赛官方（http://crohme.liris.cnrs.fr/）
+- **本项目实际使用的下载地址**：https://aistudio.baidu.com/datasetdetail/174727
+  （官方站点经常无法访问，AI Studio 上的这份镜像可用）
 - 用途：验证集与评测集
 - 原始格式为 INKML 在线笔迹，本项目使用其渲染后的图像版本
 

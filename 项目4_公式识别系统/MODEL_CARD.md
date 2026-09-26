@@ -109,6 +109,7 @@ pred, path, info = predictor.predict_and_visualize('test.jpg')   # 附渲染对�
 
 **CROHME**（Competition on Recognition of Online Handwritten Mathematical Expressions）
 - 来源：CROHME 竞赛官方（http://crohme.liris.cnrs.fr/）
+- 实际下载地址（官方站点常不可访问）：https://aistudio.baidu.com/datasetdetail/174727
 
 感谢以上数据集的发布方，没有它们本模型无法完成。
 
